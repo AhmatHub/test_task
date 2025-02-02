@@ -1,0 +1,89 @@
+import json
+import pdfplumber
+from typing import Dict, List
+
+def extract_pdf_data(file_path: str) -> Dict[str, str]:
+    "Читает PDF и возвращает данные в виде словаря."
+    data = {}
+    with pdfplumber.open(file_path) as pdf:
+        for page in pdf.pages:
+            text = page.extract_text()
+            if text:
+                for line in text.split('\n'):
+                    if ':' in line:  # Простая логика парсинга ключ-значение
+                        key, value = line.split(':', 1)
+                        data[key.strip()] = value.strip()
+    return data
+
+def compare_pdf_structure(reference_data: Dict[str, str], test_data: Dict[str, str]) -> bool:
+    "Сравнивает структуру тестового PDF с эталонным."
+    return set(reference_data.keys()) == set(test_data.keys())
+
+def convert_table_to_json(table: List[Dict[str, str]], websocket_response: Dict[str, Dict[str, str]], base_ws: Dict[str, str]) -> Dict:
+    "Преобразует таблицу в JSON по заданной структуре."
+    result = {"columns": [], "order_by": {}, "conditions_data": {}, "page_size": "", "row_height": "", "color_conditions": {}, "module": "SO"}
+    
+    # Формируем columns
+    for idx, row in enumerate(table):
+        col_name = row["Columns View"]
+        if col_name in websocket_response:
+            result["columns"].append({"index": websocket_response[col_name]["index"], "sort": idx})
+    
+    # Order By
+    for row in table:
+        if row["Sort By"]:
+            result["order_by"] = {"direction": row["Sort By"], "index": websocket_response[row["Columns View"]]["index"]}
+            break
+    
+    # Conditions
+    for row in table:
+        if row["Condition"]:
+            key = websocket_response[row["Columns View"]]["filter"]
+            conditions = [{"type": c.split('=')[0], "value": c.split('=')[1]} for c in row["Condition"].split(",")]
+            result["conditions_data"][key] = conditions
+    
+    # Page Size & Row Height
+    for row in table:
+        if row["Lines per page"]:
+            result["page_size"] = row["Lines per page"]
+        if row["Row Height"]:
+            result["row_height"] = row["Row Height"]
+    
+    # Color Conditions
+    for row in table:
+        if row["Highlight By"]:
+            key = websocket_response[row["Columns View"]]["filter"]
+            conditions = []
+            for cond in row["Highlight By"].split(","):
+                parts = cond.split("=")
+                if len(parts) == 3:
+                    conditions.append({"type": parts[0], "value": parts[1], "color": parts[2]})
+                else:
+                    conditions.append({"type": parts[0], "value": parts[1], "color": ""})
+            result["color_conditions"][key] = conditions
+    
+    return result
+
+if __name__ == "__main__":
+    reference_pdf_data = extract_pdf_data("test_task.pdf")
+    test_pdf_data = extract_pdf_data("test_task.pdf")  # Здесь нужно заменить на тестируемый PDF
+    print("PDF соответствует эталону:", compare_pdf_structure(reference_pdf_data, test_pdf_data))
+    
+    # Данные из additional_task.py
+    table = [{'Columns View': 'SO Number', 'Sort By': '', 'Highlight By': 'equals=S110=rgba(172,86,86,1),equals=S111', 'Condition': 'equals=S110,equals=S111', 'Row Height': '60', 'Lines per page': '25'},
+             {'Columns View': 'Client PO', 'Sort By': '', 'Highlight By': 'equals=P110,equals=P111', 'Condition': 'equals=P110', 'Row Height': '', 'Lines per page': ''},
+             {'Columns View': 'Terms of Sale', 'Sort By': 'asc', 'Highlight By': 'equals=S110=rgba(172,86,86,1)', 'Condition': '', 'Row Height': '', 'Lines per page': ''}]
+    
+    websocket_response = {'Client PO': {'index': 'so_list_client_po', 'filter': 'client_po'},
+                          'SO Number': {'index': 'so_list_so_number', 'filter': 'so_no'},
+                          'Terms of Sale': {'index': 'so_list_terms_of_sale', 'filter': 'term_sale'}}
+    
+    base_ws = {'Columns View': 'columns',
+               'Sort By': 'order_by',
+               'Condition': 'conditions_data',
+               'Lines per page': 'page_size',
+               'Row Height': 'row_height',
+               'Highlight By': 'color_conditions'}
+    
+    json_output = convert_table_to_json(table, websocket_response, base_ws)
+    print(json.dumps(json_output, indent=4))
